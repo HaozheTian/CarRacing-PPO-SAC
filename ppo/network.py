@@ -67,4 +67,4 @@ class CNNPolicy(nn.Module):
             log_prob_act = dist.log_prob(act).sum(axis=-1)
             return act, log_prob_act, mean
         else:
-            return dist.log_prob(act)
+            return dist.log_prob(act).sum(axis=-1)
