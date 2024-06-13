@@ -1,13 +1,21 @@
 import torch
 import torch.nn as nn
-import numpy as np
 from torch.distributions.normal import Normal
 import torch.nn.functional as F
+
+
+
+LOG_STD_MAX = 2
+LOG_STD_MIN = -5
+
+
 
 def layer_init(layer, bias_const=0.0):
     nn.init.kaiming_normal_(layer.weight)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
+
+
 
 class Encoder(nn.Module):
     def __init__(self, in_shape, out_size) -> None:
@@ -28,10 +36,13 @@ class Encoder(nn.Module):
 
         self.fc = layer_init(nn.Linear(output_size, out_size))
 
+
     def forward(self, x):
         x = self.conv(x/255.0)
         x = self.fc(x)
         return x
+
+
 
 class CNNQNetwork(nn.Module):
     def __init__(self, env):
@@ -41,11 +52,39 @@ class CNNQNetwork(nn.Module):
         if obs_shape[0] == obs_shape[1]:
             h, w, c = obs_shape
             obs_shape = (c, h, w)
+
         self.encoder = Encoder(obs_shape, 128)
         self.fc1 = nn.Linear(128 + act_shape[0], 256)
         self.fc2 = nn.Linear(256, 256)
         self.fc3 = nn.Linear(256, 1)
 
+
+    def forward(self, obs, act):
+        obs_encoding = F.relu(self.encoder(obs))
+        x = torch.cat([obs_encoding, act], dim=1)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+    
+
+
+class CNNActor(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        obs_shape = env.observation_space.shape
+        act_shape = env.action_space.shape
+        if obs_shape[0] == obs_shape[1]:
+            h, w, c = obs_shape
+            obs_shape = (c, h, w)
+
+        self.encoder = Encoder(obs_shape, 128)
+        self.fc1 = nn.Linear(128, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc_mean = nn.Linear(256, act_shape[0])
+        self.fc_log_std = nn.Linear(256, act_shape[0])
+
+        # action rescaling
         self.register_buffer(
             "action_scale", torch.tensor((env.action_space.high - env.action_space.low) / 2.0, dtype=torch.float32)
         )
@@ -53,11 +92,32 @@ class CNNQNetwork(nn.Module):
             "action_bias", torch.tensor((env.action_space.high + env.action_space.low) / 2.0, dtype=torch.float32)
         )
 
-    def forward(self, obs, act):
-        act = (act - self.action_bias)/self.action_scale
+    
+    def forward(self, obs):
         obs_encoding = F.relu(self.encoder(obs))
-        x = torch.cat([obs_encoding, act], dim=1)
-        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc1(obs_encoding))
         x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        mean = self.fc_mean(x)
+        log_std = self.fc_log_std(x)
+        log_std = torch.tanh(log_std)
+        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+        return mean, log_std
+    
+
+    def get_action(self, obs):
+        mean, log_std = self(obs)
+        std = log_std.exp()
+
+        normal = Normal(mean, std)
+        # for reparameterization trick (mean + std * N(0,1))
+        # this allows backprob with respect to mean and std
+        x_t = normal.rsample()
+        y_t = torch.tanh(x_t)
+        action = y_t * self.action_scale + self.action_bias
+
+        log_prob = normal.log_prob(x_t)
+        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + 1e-6)
+        log_prob = log_prob.sum(1, keepdim=True)
+
+        mean = torch.tanh(mean) * self.action_scale + self.action_bias
+        return action, log_prob, mean
