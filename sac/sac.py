@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from sac.network import CNNActor, CNNQNetwork
 from sac.buffer import ReplayBuffer
+from env.wrapper import ImageEnv
 
 class SAC():
     def __init__(self, env: gymnasium.Env, **kwargs) ->  None:
@@ -23,7 +24,6 @@ class SAC():
             self.writer = SummaryWriter(log_dir='runs/SAC_'+self.env_name+self.time_str)
         self.num_eps = 0
         self.eps_rets, self.eps_lens = [], []
-
 
     def learn(self):
         eps_ret, eps_len = 0, 0
@@ -59,12 +59,14 @@ class SAC():
             if step >= self.learning_starts:
                 self.update(step)
             
-            if (step+1)/self.save_freq == 0:
+            if (step+1)%self.save_freq == 0:
                 self.save_ckpt(ckpt_name=f'{step}.pt')
 
+            if (step+1)%self.val_freq == 0:
+                self.validate()
 
     def update(self, step: int):
-        data = self.rb.sample(self.batch_size, permute_obs=(0, 3, 1, 2))
+        data = self.rb.sample(self.batch_size)
 
         # Q-NETWORK UPDATE
         # compute target for the Q functions
@@ -84,6 +86,8 @@ class SAC():
         self.q_optimizer.zero_grad()
         qf_loss.backward()
         self.q_optimizer.step()
+        if self.use_tb:
+            self.writer.add_scalar('charts/loss_q', qf_loss.item(), step)
 
         # POLICY UPDATE
         # update the policy
@@ -99,23 +103,46 @@ class SAC():
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self.actor_optimizer.step()
+            if self.use_tb:
+                self.writer.add_scalar('charts/loss_policy', -actor_loss.item(), step)
 
         # UPDATE TARGET Q-NETWORKS
         if step % self.target_q_freq == 0:
             for param, target_param in zip(self.qf1.parameters(), self.qf1_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
             for param, target_param in zip(self.qf2.parameters(), self.qf2_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data) 
-
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
     def get_act(self, obs: np.ndarray, step: int) -> np.ndarray:
         if self.ckpt_path == None and step<self.learning_starts:
             act = self.env.action_space.sample()
         else:
-            act, _, _ = self.actor.get_action(torch.Tensor(obs).permute(2, 0, 1).unsqueeze(0).to(self.device))
+            act, _, _ = self.actor.get_action(torch.Tensor(obs).unsqueeze(0).to(self.device))
             act = act.squeeze(0).detach().cpu().numpy()
         return act
+    
+    def validate(self):
+        if self.render_val:
+            env_val = gymnasium.make(self.env.spec.id, render_mode='human')
+        else:
+            env_val = gymnasium.make(self.env.spec.id)
+        env_val = ImageEnv(env_val)
+        obs, _ = env_val.reset()
+        done = False
+        eps_ret, eps_len = 0, 0
+        while not done:
+            _, _, act = self.actor.get_action(torch.Tensor(obs).unsqueeze(0).to(self.device))
+            act = act.squeeze(0).detach().cpu().numpy()
+            obs, rew, term, trun, _ = env_val.step(act)
+            done = term or trun
+            eps_ret += rew
+            eps_len += 1
 
+        env_val.close()
+        print(f"Validation Episode Return: {eps_ret}, Length: {eps_len}")
+        if self.use_tb:
+            self.writer.add_scalar('validation/episode_return', eps_ret, self.num_eps)
+            self.writer.add_scalar('validation/episode_length', eps_len, self.num_eps)
 
     def _init_hyperparameters(self, **kwargs):
         self.env_name = self.env.__class__.__name__
@@ -126,26 +153,27 @@ class SAC():
         self.seed = kwargs.get('seed', 0)
         self.use_tb = kwargs.get('use_tb', True)
         self.ckpt_path = kwargs.get('ckpt_path', None)
+
         self.q_lr = kwargs.get('q_lr', 3e-4)                # learning rate for Q network
         self.policy_lr = kwargs.get('policy_lr', 3e-4)      # learning rate for policy network
-        self.buffer_size = kwargs.get('buffer_size', 100000)   # replay buffer size
-        self.batch_size = kwargs.get('batch_size', 64)      # batch size for updating network
-        self.total_steps = kwargs.get('total_steps', 1000000)   # maximum number of iterations
-        self.learning_starts = kwargs.get('learning_starts', 5000) # start learning
+        self.buffer_size = kwargs.get('buffer_size', 1000000)   # replay buffer size
+        self.batch_size = kwargs.get('batch_size', 256)      # batch size for updating network
+        self.total_steps = kwargs.get('total_steps', 3000000)   # maximum number of iterations
+        self.learning_starts = kwargs.get('learning_starts', self.batch_size) # start learning
         self.tau = kwargs.get('tau', 0.005)                 # for updating Q target
         self.gamma = kwargs.get('gamma', 0.99)              # forgetting factor
         self.alpha = kwargs.get('alpha', 0.2)               # entropy tuning parameter
-        self.policy_freq = kwargs.get('policy_freq', 5)     # frequency for updating policy network
+        self.policy_freq = kwargs.get('policy_freq', 2)    # frequency for updating policy network
         self.target_q_freq = kwargs.get('target_q_freq', 1) # frequency for updating target network                    # displaying logs
-        self.save_freq = kwargs.get('save_freq', 50000)     # frequency for saving the networks
+        self.save_freq = kwargs.get('save_freq', 10000)     # frequency for saving the networks
+        self.val_freq = kwargs.get('val_freq', 2000)       # frequency for validation
+        self.render_val = kwargs.get('render_val', True)     # render validation
 
     def _seed(self):
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
         torch.cuda.manual_seed(self.seed)
         torch.backends.cudnn.deterministic = True
-        self.env.action_space.seed(self.seed)
-        self.env.observation_space.seed(self.seed)
 
 
     def _init_networks(self):

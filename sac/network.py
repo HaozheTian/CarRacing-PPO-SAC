@@ -21,21 +21,17 @@ class Encoder(nn.Module):
     def __init__(self, in_shape, out_size) -> None:
         super().__init__()
         self.conv = nn.Sequential(
-            layer_init(nn.Conv2d(in_shape[0], 32, kernel_size=8, stride=4)),
+            layer_init(nn.Conv2d(in_shape[0], 16, kernel_size=8, stride=4)),
             nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+            layer_init(nn.Conv2d(16, 32, kernel_size=4, stride=2)),
             nn.ReLU(),
-            layer_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-            nn.Flatten(),
-            nn.ReLU()
+            nn.Flatten()
         )
 
         # compute conv output size
         with torch.inference_mode():
             output_size = self.conv(torch.zeros(1, *in_shape)).shape[1]
-
         self.fc = layer_init(nn.Linear(output_size, out_size))
-
 
     def forward(self, x):
         x = self.conv(x/255.0)
@@ -53,18 +49,17 @@ class CNNQNetwork(nn.Module):
             h, w, c = obs_shape
             obs_shape = (c, h, w)
 
-        self.encoder = Encoder(obs_shape, 128)
-        self.fc1 = nn.Linear(128 + act_shape[0], 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 1)
-
+        self.obs_encoder = Encoder(obs_shape, 256)
+        self.act_encoder = nn.Linear(act_shape[0], 256)
+        self.fc1 = nn.Linear(512, 256)
+        self.fc2 = nn.Linear(256, 1)
 
     def forward(self, obs, act):
-        obs_encoding = F.relu(self.encoder(obs))
-        x = torch.cat([obs_encoding, act], dim=1)
+        obs_encoding = F.relu(self.obs_encoder(obs))
+        act_encoding = F.relu(self.act_encoder(act))
+        x = torch.cat([obs_encoding, act_encoding], dim=1)
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.fc2(x)
         return x
     
 
@@ -78,9 +73,8 @@ class CNNActor(nn.Module):
             h, w, c = obs_shape
             obs_shape = (c, h, w)
 
-        self.encoder = Encoder(obs_shape, 128)
-        self.fc1 = nn.Linear(128, 256)
-        self.fc2 = nn.Linear(256, 256)
+        self.obs_encoder = Encoder(obs_shape, 256)
+        self.fc1 = nn.Linear(256, 256)
         self.fc_mean = nn.Linear(256, act_shape[0])
         self.fc_log_std = nn.Linear(256, act_shape[0])
 
@@ -94,9 +88,8 @@ class CNNActor(nn.Module):
 
     
     def forward(self, obs):
-        obs_encoding = F.relu(self.encoder(obs))
+        obs_encoding = F.relu(self.obs_encoder(obs))
         x = F.relu(self.fc1(obs_encoding))
-        x = F.relu(self.fc2(x))
         mean = self.fc_mean(x)
         log_std = self.fc_log_std(x)
         log_std = torch.tanh(log_std)

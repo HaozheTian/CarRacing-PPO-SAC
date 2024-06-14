@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 
 class Samples():
-    def __init__(self, device: torch.device, permute_obs: Optional[Tuple],
+    def __init__(self, device: torch.device,
                  obs: np.ndarray, 
                  obs_next: np.ndarray, 
                  act: np.ndarray, 
@@ -18,10 +18,6 @@ class Samples():
         self.act = torch.tensor(act, device=device, dtype=torch.float32)
         self.rew = torch.tensor(rew, device=device, dtype=torch.float32)
         self.done = torch.tensor(done, device=device, dtype=torch.float32)
-
-        if permute_obs != None:
-            self.obs = self.obs.permute(dims=permute_obs)
-            self.obs_next = self.obs_next.permute(dims=permute_obs)
 
 
 class ReplayBuffer():
@@ -56,7 +52,7 @@ class ReplayBuffer():
             self.ptr = 0
     
 
-    def sample(self, batch_size: int, permute_obs: Optional[Tuple]=None) -> Samples:
+    def sample(self, batch_size: int) -> Samples:
         if self.full:
             batch_inds = (np.random.randint(1, self.buffer_size, size=batch_size) + self.ptr) % self.buffer_size
         else:
@@ -66,7 +62,7 @@ class ReplayBuffer():
                 self.index(self.act_array, batch_inds),
                 self.index(self.rew_array, batch_inds),
                 self.index(self.done_array, batch_inds))
-        return Samples(self.device, permute_obs, *data)
+        return Samples(self.device, *data)
     
 
     def index(self, x, inds):
