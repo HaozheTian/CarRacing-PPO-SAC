@@ -7,17 +7,17 @@ from typing import Union
 
 
 class Samples():
-    def __init__(self, obs: torch.Tensor, 
-                 obs_next: torch.Tensor, 
-                 act: torch.Tensor, 
-                 rew: torch.Tensor, 
-                 done: torch.Tensor):
-        self.obs = obs
-        self.obs_next = obs_next
-        self.act = act
-        self.rew = rew
-        self.done = done
-
+    def __init__(self, device: torch.device,
+                 obs: np.ndarray, 
+                 obs_next: np.ndarray, 
+                 act: np.ndarray, 
+                 rew: np.ndarray, 
+                 done: np.ndarray):
+        self.obs = torch.tensor(obs, device=device, dtype=torch.float32)
+        self.obs_next = torch.tensor(obs_next, device=device, dtype=torch.float32)
+        self.act = torch.tensor(act, device=device, dtype=torch.float32)
+        self.rew = torch.tensor(rew, device=device, dtype=torch.float32)
+        self.done = torch.tensor(done, device=device, dtype=torch.float32)
 
 
 class ReplayBuffer():
@@ -32,9 +32,9 @@ class ReplayBuffer():
         self.full = False
         self.device = device
 
-        self.obs_array = np.zeros((self.buffer_size, *self.obs_shape), dtype=np.uint8)
-        self.obs_next_array = np.zeros((self.buffer_size, *self.obs_shape), dtype=np.uint8)
-        self.act_array = np.zeros((self.buffer_size, *self.act_shape), dtype=np.float32)
+        self.obs_array = np.zeros((self.buffer_size, *self.obs_shape), dtype=env.observation_space.dtype)
+        self.obs_next_array = np.zeros((self.buffer_size, *self.obs_shape), dtype=env.observation_space.dtype)
+        self.act_array = np.zeros((self.buffer_size, *self.act_shape), dtype=env.action_space.dtype)
         self.rew_array = np.zeros((self.buffer_size, 1), dtype=np.float32)
         self.done_array = np.zeros((self.buffer_size, 1), dtype=np.float32)
 
@@ -57,22 +57,12 @@ class ReplayBuffer():
             batch_inds = (np.random.randint(1, self.buffer_size, size=batch_size) + self.ptr) % self.buffer_size
         else:
             batch_inds = np.random.randint(0, self.ptr, size=batch_size)
-        return self._get_samples(batch_inds)
-    
-
-    def _get_samples(self, batch_inds):
-        data = (
-            self.index(self.obs_array, batch_inds),
-            self.index(self.obs_next_array, batch_inds),
-            self.index(self.act_array, batch_inds),
-            self.index(self.rew_array, batch_inds),
-            self.index(self.done_array, batch_inds),
-        )
-        return Samples(*tuple(map(self.to_torch, data)))
-
-
-    def to_torch(self, array: np.ndarray):
-        return torch.tensor(array, device=self.device)
+        data = (self.index(self.obs_array, batch_inds),
+                self.index(self.obs_next_array, batch_inds),
+                self.index(self.act_array, batch_inds),
+                self.index(self.rew_array, batch_inds),
+                self.index(self.done_array, batch_inds))
+        return Samples(self.device, *data)
     
 
     def index(self, x, inds):

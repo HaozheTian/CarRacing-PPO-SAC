@@ -167,13 +167,3 @@ class SAC():
             self.buffer_size,
             self.device,
         )
-
-
-
-
-
-# ckpt_path: str ='',
-# seed: int = 0, 
-# hyperparameters: Dict = {},
-# autosave = False,
-# use_tb=False) -> None:
