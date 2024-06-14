@@ -1,5 +1,6 @@
 import gymnasium
 import torch
+import os
 import numpy as np
 from datetime import datetime
 from torch.optim import Adam
@@ -56,20 +57,23 @@ class SAC():
                 obs, info = self.env.reset()
         
             if step >= self.learning_starts:
-                self.update()
+                self.update(step)
+            
+            if (step+1)/self.save_freq == 0:
+                self.save_ckpt(ckpt_name=f'{step}.pt')
 
 
-    def update(self):
-        data = self.rb.sample(self.batch_size)
+    def update(self, step: int):
+        data = self.rb.sample(self.batch_size, permute_obs=(0, 3, 1, 2))
 
         # Q-NETWORK UPDATE
         # compute target for the Q functions
         with torch.no_grad():
-            act_next, act_next_log_prob, _ = self.actor.get_action(data.obs_next)
+            act_next, log_prob_next, _ = self.actor.get_action(data.obs_next)
             qf1_next = self.qf1_target(data.obs_next, act_next)
             qf2_next = self.qf2_target(data.obs_next, act_next)
-            min_qf_next = torch.min(qf1_next, qf2_next) - self.alpha*act_next_log_prob
-            y = data.reward.flatten() + (1 - data.done.flatten()) * self.gamma * (min_qf_next).view(-1)
+            min_qf_next = torch.min(qf1_next, qf2_next) - self.alpha*log_prob_next
+            y = data.rew.flatten() + (1 - data.done.flatten()) * self.gamma * (min_qf_next).view(-1)
         # compute loss for the  Q functions
         qf_1 = self.qf1(data.obs, data.act).view(-1)
         qf_2 = self.qf2(data.obs, data.act).view(-1)
@@ -83,7 +87,7 @@ class SAC():
 
         # POLICY UPDATE
         # update the policy
-        if self.global_step % self.policy_freq == 0: # TD3 Delayed update support
+        if step % self.policy_freq == 0: # TD3 Delayed update support
             for _ in range(self.policy_freq):
                 acts, log_prob, _ = self.actor.get_action(data.obs)
                 qf1 = self.qf1(data.obs, acts)
@@ -97,7 +101,7 @@ class SAC():
                 self.actor_optimizer.step()
 
         # UPDATE TARGET Q-NETWORKS
-        if self.global_step % self.target_network_frequency == 0:
+        if step % self.target_q_freq == 0:
             for param, target_param in zip(self.qf1.parameters(), self.qf1_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
             for param, target_param in zip(self.qf2.parameters(), self.qf2_target.parameters()):
@@ -122,18 +126,18 @@ class SAC():
         self.seed = kwargs.get('seed', 0)
         self.use_tb = kwargs.get('use_tb', True)
         self.ckpt_path = kwargs.get('ckpt_path', None)
-        self.q_lr = kwargs.get('q_lr', 1e-3)                # learning rate for Q network
+        self.q_lr = kwargs.get('q_lr', 3e-4)                # learning rate for Q network
         self.policy_lr = kwargs.get('policy_lr', 3e-4)      # learning rate for policy network
         self.buffer_size = kwargs.get('buffer_size', 100000)   # replay buffer size
-        self.batch_size = kwargs.get('batch_size', 1024)    # batch size for updating network
+        self.batch_size = kwargs.get('batch_size', 64)      # batch size for updating network
         self.total_steps = kwargs.get('total_steps', 1000000)   # maximum number of iterations
-        self.learning_starts = self.batch_size              # start learning
+        self.learning_starts = kwargs.get('learning_starts', 5000) # start learning
         self.tau = kwargs.get('tau', 0.005)                 # for updating Q target
         self.gamma = kwargs.get('gamma', 0.99)              # forgetting factor
         self.alpha = kwargs.get('alpha', 0.2)               # entropy tuning parameter
-        self.policy_freq = kwargs.get('policy_freq', 2)     # frequency for updating policy network
+        self.policy_freq = kwargs.get('policy_freq', 5)     # frequency for updating policy network
         self.target_q_freq = kwargs.get('target_q_freq', 1) # frequency for updating target network                    # displaying logs
-
+        self.save_freq = kwargs.get('save_freq', 50000)     # frequency for saving the networks
 
     def _seed(self):
         np.random.seed(self.seed)
@@ -167,3 +171,25 @@ class SAC():
             self.buffer_size,
             self.device,
         )
+ 
+    def save_ckpt(self, ckpt_name: str):
+        directory = os.path.join('saved', f'sac_{self.env_name}_{self.time_str}')
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        path = os.path.join(directory, ckpt_name)
+        
+        torch.save({"actor_state_dict": self.actor.state_dict(), 
+            "qf1_state_dict": self.qf1.state_dict(),
+            "qf2_state_dict": self.qf2.state_dict(),
+            "qf1_target_state_dict": self.qf1_target.state_dict(),
+            "qf2_target_state_dict": self.qf2_target.state_dict()
+            }, path)
+
+        print(f"Checkpoint saved to {path}")
+
+    def _load_ckpt(self, ckpt: dict):
+        self.actor.load_state_dict(ckpt["actor_state_dict"])
+        self.qf1.load_state_dict(ckpt["qf1_state_dict"])
+        self.qf1_target.load_state_dict(ckpt["qf1_target_state_dict"])
+        self.qf2.load_state_dict(ckpt["qf2_state_dict"])
+        self.qf2_target.load_state_dict(ckpt["qf2_target_state_dict"])
