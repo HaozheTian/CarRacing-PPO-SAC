@@ -45,9 +45,6 @@ class CNNQNetwork(nn.Module):
         super().__init__()
         obs_shape = env.observation_space.shape
         act_shape = env.action_space.shape
-        if obs_shape[0] == obs_shape[1]:
-            h, w, c = obs_shape
-            obs_shape = (c, h, w)
 
         self.obs_encoder = Encoder(obs_shape, 256)
         self.act_encoder = nn.Linear(act_shape[0], 256)
