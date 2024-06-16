@@ -154,9 +154,9 @@ class SAC():
         self.use_tb = kwargs.get('use_tb', True)
         self.ckpt_path = kwargs.get('ckpt_path', None)
 
-        self.q_lr = kwargs.get('q_lr', 3e-4)                # learning rate for Q network
-        self.policy_lr = kwargs.get('policy_lr', 3e-4)      # learning rate for policy network
-        self.buffer_size = kwargs.get('buffer_size', 1000000)   # replay buffer size
+        self.q_lr = kwargs.get('q_lr', 1e-4)                # learning rate for Q network
+        self.policy_lr = kwargs.get('policy_lr', 1e-4)      # learning rate for policy network
+        self.buffer_size = kwargs.get('buffer_size', 500000)   # replay buffer size
         self.batch_size = kwargs.get('batch_size', 256)      # batch size for updating network
         self.total_steps = kwargs.get('total_steps', 3000000)   # maximum number of iterations
         self.learning_starts = kwargs.get('learning_starts', self.batch_size) # start learning
