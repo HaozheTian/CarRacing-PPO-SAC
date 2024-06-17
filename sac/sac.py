@@ -1,4 +1,7 @@
 import gymnasium
+import random
+import cv2
+import string
 import torch
 import os
 import numpy as np
@@ -143,6 +146,35 @@ class SAC():
         if self.use_tb:
             self.writer.add_scalar('validation/episode_return', eps_ret, self.num_eps)
             self.writer.add_scalar('validation/episode_length', eps_len, self.num_eps)
+
+
+    def animate(self):
+        env = gymnasium.make(self.env.spec.id, render_mode='rgb_array')
+        env = ImageEnv(env)
+        frames = []
+
+        obs, _ = env.reset()
+        done, eps_ret, eps_len = False, 0, 0
+        while not done:
+            frames.append(env.render())
+            _, _, act = self.actor.get_action(torch.Tensor(obs).unsqueeze(0).to(self.device))
+            act = act.squeeze(0).detach().cpu().numpy()
+            obs, rew, term, trun, _ = env.step(act)
+            done = term or trun
+            eps_ret += rew
+            eps_len += 1
+
+        env.close()
+        print(f"Validation Episode Return: {eps_ret}, Length: {eps_len}")
+
+        height, width, layers = frames[0].shape
+        video_name = ''.join(random.choice(string.ascii_letters) for i in range(18)) + '.webm'
+        fourcc = cv2.VideoWriter_fourcc(*'VP90')
+        video = cv2.VideoWriter(video_name, fourcc, 10, (width, height))
+        for frame in frames:
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            video.write(img)
+        video.release()
 
     def _init_hyperparameters(self, **kwargs):
         self.env_name = self.env.__class__.__name__
